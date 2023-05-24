@@ -1,54 +1,91 @@
-#в данной версии мы используем алгоритм выделения обьекта с помощью цветового фильтра
-#(это делается для того, чтобы избежать ошибок если обьект большой и контрастный)
-#opencv - библиотека для обработки видеопотока с камеры и отображения на экране прямоугольника вокруг объекта определенного цвета.
-
 import cv2 as cv
 import numpy as np
 
-# определяем камеру с помощью opencv
+# Определяем камеру с помощью OpenCV
 vid = cv.VideoCapture(0)
 
-# определяем нижний и верхний цветовые пороги для фильтра
-lower_color = np.array([0, 50, 50])
-upper_color = np.array([10, 255, 255])
+# Проверяем, успешно ли открыта камера
+if not vid.isOpened():
+    print("Не удалось открыть камеру")
+    exit()
 
-# определяем начальные координаты и размеры прямоугольника
-x, y, w, h = 0, 0, 0, 0 
+# Определяем начальные координаты и размеры прямоугольника
+x, y, w, h = 0, 0, 0, 0
 
-while(True):
-    # берем видео с камеры
+# Переменные для отслеживания движения
+previous_frame = None #хранит предыдущий кадр для сравнения с текущим
+motion_threshold = 1000 # пороговое значение площади контура, выше которого считается, что объект движется.
+
+while True:
+    # Берем видео с камеры
     ret, frame = vid.read()
 
-    # преобразуем изображение в цветовое пространство HSV
+    # Преобразуем изображение в цветовое пространство HSV
     hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
 
-    # применяем цветовой фильтр к изображению
+    # Определяем нижний и верхний цветовые пороги для фильтра
+    lower_color = np.array([0, 50, 50])
+    upper_color = np.array([10, 255, 255])
+
+    # Применяем цветовой фильтр к изображению
     mask = cv.inRange(hsv, lower_color, upper_color)
 
-    # находим контуры объектов на изображении
+    # Находим контуры объектов на изображении
     contours, hierarchy = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
-    # выбираем контур с наибольшей площадью
-    if len(contours) > 0:
-        max_contour = max(contours, key=cv.contourArea)
-        x, y, w, h = cv.boundingRect(max_contour)
+    # Обновляем предыдущий кадр для отслеживания движения
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    gray = cv.GaussianBlur(gray, (21, 21), 0)
+    if previous_frame is None:
+        previous_frame = gray
+        continue
 
-    # рисуем прямоугольник на изображении
-    cv.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+    # Вычисляем абсолютное различие между текущим и предыдущим кадром
+    frame_delta = cv.absdiff(previous_frame, gray)
 
-    # отображаем
+    # Применяем порог для выделения движения
+    thresh = cv.threshold(frame_delta, 25, 255, cv.THRESH_BINARY)[1]
+
+    # Расширяем контуры для устранения шума
+    thresh = cv.dilate(thresh, None, iterations=2)
+
+    # Находим контуры движущихся объектов
+    motion_contours, _ = cv.findContours(thresh.copy(), cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    # Выбираем контур с наибольшей площадью и подходящим размером
+    filtered_motion_contours = []
+    for contour in motion_contours:
+        contour_area = cv.contourArea(contour)
+        if contour_area > motion_threshold:
+            filtered_motion_contours.append(contour)
+
+    if len(filtered_motion_contours) > 0:
+        max_motion_contour = max(filtered_motion_contours, key=cv.contourArea)
+        epsilon = 0.02 * cv.arcLength(max_motion_contour, True)
+        approx = cv.approxPolyDP(max_motion_contour, epsilon, True)
+        x, y, w, h = cv.boundingRect(approx)
+
+        # Фильтруем прямоугольник по размерам
+        if w > 30 and h > 30:
+            # Рисуем красный квадрат на изображении для выделения движущегося объекта
+            cv.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+    # Обновляем предыдущий кадр
+    previous_frame = gray
+
+    # Отображаем изображение
     cv.imshow('frame', frame)
 
-    # проверяем, была ли нажата клавиша 'q'
-    if cv.waitKey(1) & 0xFF == ord('q') or cv.waitKey(1) & 0xFF == 27:
+    # Проверяем, была ли нажата клавиша 'q'(закрывает программу)
+    if cv.waitKey(1) & 0xFF in (ord('q'), 27):
         break
 
-    # проверяем, закрыта ли окно пользователем
+    # Проверяем, закрыто ли окно пользователем(закрывает программу)
     if cv.getWindowProperty('frame', cv.WND_PROP_VISIBLE) < 1:
         break
 
-# после цикла освобождаем камеру
+# После цикла освобождаем камеру
 vid.release()
 
-# уничтожаем все окна
+# Уничтожаем все окна
 cv.destroyAllWindows()
